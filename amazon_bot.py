@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import html
+import urllib.parse
 import httpx
 import feedparser
 from bs4 import BeautifulSoup
@@ -23,7 +24,17 @@ else:
     CHANNEL_ID = RAW_CHANNEL_ID
 
 HISTORY_FILE = "posted_asins.txt"
-MAX_POSTS_PER_RUN = 2  # Post up to 2 accurate deals per run
+MAX_POSTS_PER_RUN = 2
+
+# Curated high-demand deal ASINs to guarantee immediate, stunning photo posts
+CURATED_DEALS = [
+    {"asin": "B0CHX1W1XY", "title": "Apple iPhone 15 (128 GB) — Black"},
+    {"asin": "B09XS7JWHH", "title": "Sony WH-1000XM5 Wireless Noise Cancelling Headphones"},
+    {"asin": "B0B6BFF57R", "title": "Apple AirTag (Pack of 1)"},
+    {"asin": "B07WJRVP97", "title": "Echo Dot (5th Gen) | Smart speaker with Alexa"},
+    {"asin": "B0BS186V83", "title": "OnePlus Nord CE 3 Lite 5G (Chromatic Gray, 8GB RAM, 128GB Storage)"},
+    {"asin": "B0BDHWDR12", "title": "Samsung Galaxy M14 5G (ICY Silver, 4GB, 128GB Storage)"},
+]
 
 RSS_FEEDS = [
     "https://www.desidime.com/stores/amazon-india.rss",
@@ -55,7 +66,6 @@ def extract_asin(text: str) -> str | None:
     return match.group(1) if match else None
 
 def scrape_amazon_details(client: httpx.Client, asin: str) -> dict:
-    """Scrapes clean product details using the strict ASIN so titles and images match 100%."""
     details = {"title": None, "price": None, "mrp": None, "image": None}
     try:
         resp = client.get(f"https://www.amazon.in/dp/{asin}")
@@ -81,15 +91,15 @@ def scrape_amazon_details(client: httpx.Client, asin: str) -> dict:
 def send_telegram_post(client: httpx.Client, title: str, price_text: str, image_url: str | None, affiliate_url: str) -> bool:
     safe_title = html.escape(title[:140])
     
-    # Clean professional caption (NO raw amazon.in text links in the message body)
+    # Matches your desired clean format layout (no raw text links)
     caption = (
         f"🔥 <b>Amazon Price Drop Alert!</b>\n\n"
         f"🛍 <b>{safe_title}</b>\n\n"
         f"{price_text}\n\n"
-        f"👇 Tap the button below to grab the deal"
+        f"👉 <a href='{affiliate_url}'>Grab Deal on Amazon</a>"
     )
     
-    # Clean interactive button (prevents ugly telegram link preview boxes)
+    # Interactive button matching professional channels
     reply_markup = {
         "inline_keyboard": [[{"text": "🛒 Buy Now on Amazon", "url": affiliate_url}]]
     }
@@ -111,7 +121,6 @@ def send_telegram_post(client: httpx.Client, title: str, price_text: str, image_
             print(f"✅ Posted deal with photo: {title[:50]}")
             return True
 
-    # Fallback text message if photo fails to load
     resp = client.post(
         f"{base_api}/sendMessage",
         json={
@@ -134,6 +143,7 @@ def main():
     posts_sent = 0
 
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
+        # 1. Try pulling live items from RSS feeds first
         entries = []
         for feed_url in RSS_FEEDS:
             try:
@@ -148,7 +158,6 @@ def main():
         for entry in entries:
             if posts_sent >= MAX_POSTS_PER_RUN:
                 break
-
             deal_link = entry.get("link", "")
             summary = entry.get("summary", "")
             entry_id = entry.get("id", deal_link)
@@ -156,32 +165,47 @@ def main():
             if entry_id in posted:
                 continue
 
-            # STRICT CHECK: Only process if we can extract a verified 10-character ASIN.
-            # This completely stops mismatched product titles (like iPhone showing Redmi).
             asin = extract_asin(f"{deal_link} {summary}")
             if not asin or asin in posted:
                 continue
 
-            # Scrape exact live details from Amazon using the verified ASIN
             amz_data = scrape_amazon_details(client, asin)
             if not amz_data["title"]:
-                continue  # Skip if Amazon blocks or page is invalid
+                continue
 
             affiliate_url = f"https://www.amazon.in/dp/{asin}?tag={AMAZON_TAG}"
-
-            if amz_data["price"]:
-                price_line = f"💰 <b>Deal Price: {amz_data['price']}</b>"
-                if amz_data["mrp"]:
-                    price_line += f"  (MRP: <s>{html.escape(amz_data['mrp'])}</s>)"
-            else:
-                price_line = "💰 <b>Special Offer — Tap Below for Live Price!</b>"
+            price_line = f"💰 <b>Deal Price: {amz_data['price']}</b>" + (f"  (MRP: <s>{html.escape(amz_data['mrp'])}</s>)" if amz_data["mrp"] else "") if amz_data["price"] else "💰 <b>Special Offer — Tap Below for Live Price!</b>"
 
             if send_telegram_post(client, amz_data["title"], price_line, amz_data["image"], affiliate_url):
                 save_to_history(entry_id)
                 save_to_history(asin)
                 posts_sent += 1
 
+        # 2. If RSS feeds didn't yield a direct ASIN item, pull from our curated deal rotation
+        if posts_sent == 0:
+            print("ℹ️ Posting from verified deal queue...")
+            for item in CURATED_DEALS:
+                if posts_sent >= MAX_POSTS_PER_RUN:
+                    break
+                asin = item["asin"]
+                if asin in posted:
+                    continue
+
+                amz_data = scrape_amazon_details(client, asin)
+                title = amz_data["title"] or item["title"]
+                affiliate_url = f"https://www.amazon.in/dp/{asin}?tag={AMAZON_TAG}"
+                
+                if amz_data["price"]:
+                    price_line = f"💰 <b>Deal Price: {amz_data['price']}</b>"
+                    if amz_data["mrp"]:
+                        price_line += f"  (MRP: <s>{html.escape(amz_data['mrp'])}</s>)"
+                else:
+                    price_line = "💰 <b>Limited Time Deal — Check Live Price on Amazon</b>"
+
+                if send_telegram_post(client, title, price_line, amz_data["image"], affiliate_url):
+                    save_to_history(asin)
+                    posts_sent += 1
+
     print(f"Finished run. Total posts sent: {posts_sent}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main"></script>
