@@ -91,7 +91,6 @@ def scrape_amazon_details(client: httpx.Client, asin: str) -> dict:
 def send_telegram_post(client: httpx.Client, title: str, price_text: str, image_url: str | None, affiliate_url: str) -> bool:
     safe_title = html.escape(title[:140])
     
-    # Matches your desired clean format layout (no raw text links)
     caption = (
         f"🔥 <b>Amazon Price Drop Alert!</b>\n\n"
         f"🛍 <b>{safe_title}</b>\n\n"
@@ -99,7 +98,6 @@ def send_telegram_post(client: httpx.Client, title: str, price_text: str, image_
         f"👉 <a href='{affiliate_url}'>Grab Deal on Amazon</a>"
     )
     
-    # Interactive button matching professional channels
     reply_markup = {
         "inline_keyboard": [[{"text": "🛒 Buy Now on Amazon", "url": affiliate_url}]]
     }
@@ -143,7 +141,6 @@ def main():
     posts_sent = 0
 
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
-        # 1. Try pulling live items from RSS feeds first
         entries = []
         for feed_url in RSS_FEEDS:
             try:
@@ -181,7 +178,6 @@ def main():
                 save_to_history(asin)
                 posts_sent += 1
 
-        # 2. If RSS feeds didn't yield a direct ASIN item, pull from our curated deal rotation
         if posts_sent == 0:
             print("ℹ️ Posting from verified deal queue...")
             for item in CURATED_DEALS:
@@ -208,4 +204,5 @@ def main():
 
     print(f"Finished run. Total posts sent: {posts_sent}")
 
-if __name__ == "__main"></script>
+if __name__ == "__main__":
+    main()
